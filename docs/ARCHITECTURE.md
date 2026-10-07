@@ -1,15 +1,17 @@
 # SecureChain Architecture Specification
 
 ## 1. Executive Summary
-SecureChain is a dynamic multi-hop network security orchestrator designed to coordinate layered VPN tunnels, an optional VPS termination node, dynamic routing tables, DNS resolvers, and firewall containment barriers.
+SecureChain is a dynamic multi-hop network security orchestrator designed to coordinate layered VPN tunnels, an optional VPS termination node, dynamic routing tables, DNS resolvers, and firewall containment barriers across multiple operating systems.
 
 The orchestrator explicitly distinguishes:
 - **Traffic Confidentiality**: Cryptographic encapsulation of payloads at each hop.
 - **Tunnel Security**: Mutual authentication and session key isolation between hops.
 - **Routing Isolation**: Layered host routes ensuring that each tunnel payload is transmissible strictly via the immediately preceding tunnel interface.
-- **Leak Prevention**: Complete containment of DNS requests and IPv6 traffic.
-- **Availability**: Adaptive telemetry-based path selection and automatic recovery.
-- **Anonymity**: Explicitly disclaimed. Multiple VPN hops do not guarantee untraceability against global adversaries.
+- **Leak Prevention**: Complete containment of DNS requests and IPv6 traffic with capability-aware routing.
+- **Cross-Platform Firewall Enforcement**: Native firewall barriers for Windows (`netsh`), Linux (`nftables`), and macOS (`pf`) inside isolated namespaces.
+- **Availability & Resilience**: Adaptive telemetry-based path selection and race-hardened recovery.
+- **Traffic Analysis Reduction**: Optional packet-size bucket padding and timing jitter.
+- **Anonymity Boundaries**: Explicitly disclaimed. Multiple VPN hops do not guarantee untraceability against global passive adversaries.
 
 ---
 
@@ -21,6 +23,7 @@ graph TD
         CLI[SecureChain CLI - Typer & Rich]
         ConfigMgr[Configuration Loader & Validator]
         CredStore[OS Credential Store / Vault]
+        RealityDoctor[System Reality Doctor]
     end
 
     subgraph Core Engine
@@ -28,136 +31,154 @@ graph TD
         StateMachine[Central State Machine]
         ChainMgr[Multi-Hop Chain Manager]
         PathMgr[Adaptive Path Manager]
-        RecoveryEngine[Failure Recovery Engine]
+        RecoveryEngine[Race-Hardened Recovery Engine]
+    end
+
+    subgraph Privacy Subsystems
+        TrafficShaper[Traffic Shaping & Padding Engine]
+        PrivacyProxy[Local Privacy Proxy - Port 8118]
     end
 
     subgraph Networking & Security Subsystems
         RoutingCtrl[Routing Controller]
-        KillSwitch[Fail-Closed Kill Switch]
+        FirewallMgr[CrossPlatformFirewallManager]
         DnsMgr[DNS Protection Manager]
-        Ipv6Ctrl[IPv6 Leak Controller]
+        Ipv6Ctrl[IPv6 Capability Controller]
         VpsLayer[VPS Termination Layer]
+    end
+
+    subgraph Platform Firewall Backends
+        WinFw[Windows netsh advfirewall]
+        LinNft[Linux nftables inet securechain]
+        MacPf[macOS pf anchor securechain]
+        VirtKs[VirtualKillSwitch Mesh]
     end
 
     subgraph Providers & Infrastructure
         ProviderRegistry[Provider Registry]
         SimProvider[Simulated Virtual Provider]
         WgProvider[WireGuard Provider Adapter]
-        OvpnProvider[OpenVPN Provider Adapter]
-    end
-
-    subgraph Telemetry & Probes
-        HealthMonitor[Health Monitor]
-        ProbeEngine[Latency, Jitter, Loss Engine]
     end
 
     CLI --> Orchestrator
     ConfigMgr --> Orchestrator
     CredStore --> Orchestrator
+    RealityDoctor --> Orchestrator
 
     Orchestrator --> StateMachine
     Orchestrator --> ChainMgr
     Orchestrator --> PathMgr
     Orchestrator --> RecoveryEngine
+    Orchestrator --> TrafficShaper
+    Orchestrator --> PrivacyProxy
 
     ChainMgr --> RoutingCtrl
-    ChainMgr --> KillSwitch
+    ChainMgr --> FirewallMgr
     ChainMgr --> DnsMgr
     ChainMgr --> Ipv6Ctrl
     ChainMgr --> VpsLayer
     ChainMgr --> ProviderRegistry
 
+    FirewallMgr --> WinFw
+    FirewallMgr --> LinNft
+    FirewallMgr --> MacPf
+    FirewallMgr --> VirtKs
+
     ProviderRegistry --> SimProvider
     ProviderRegistry --> WgProvider
-    ProviderRegistry --> OvpnProvider
-
-    HealthMonitor --> ProbeEngine
-    HealthMonitor --> ChainMgr
-    Orchestrator --> HealthMonitor
 ```
 
 ---
 
-## 3. Explicit State Machine
+## 3. Explicit State Machine & Transitions
 
 ### 3.1 States
 - `OFFLINE`: System is idle. Physical network untouched.
 - `INITIALIZING`: Pre-flight checks, credential retrieval, routing table snapshot.
 - `BUILDING_CHAIN`: Allocating candidate hops and configuring routing sequence.
-- `CONNECTING`: Activating tunnel interfaces sequentially.
-- `VERIFYING`: Executing end-to-end ping, DNS resolution test, and IPv6 leak check.
-- `PROTECTED`: All verification checks passed. Kill switch releases normal traffic into chain.
-- `DEGRADED`: Chain operational but experiencing elevated latency, jitter, or loss. Path evaluation triggered.
+- `CONNECTING`: Activating tunnel interfaces sequentially under lockdown.
+- `VERIFYING`: Executing end-to-end ping, DNS resolution test, and IPv6 capability verification.
+- `PROTECTED`: All verification checks passed. Kill switch transitions to `FILTERED_PASS`.
+- `DEGRADED`: Chain operational but experiencing elevated latency, jitter, or loss.
 - `FAILURE_DETECTED`: Tunnel loss or leak detected.
-- `TRAFFIC_BLOCKED`: Kill switch instantly activated. All non-tunnel traffic dropped.
-- `RECOVERING`: Attempting in-place reconnect or candidate path switch.
+- `TRAFFIC_BLOCKED`: Kill switch instantly locked down. All direct physical egress blocked.
+- `RECOVERING`: Synchronized, mutex-protected recovery attempting in-place reconnect or alternative path failover.
 - `REBUILDING_ROUTE`: Updating host routes and split default routes for new path.
 - `RECOVERY_FAILED`: Max retries exhausted or no healthy candidates available.
-- `TRAFFIC_REMAINS_BLOCKED`: Terminal safe state. System will not release unverified traffic.
+- `TRAFFIC_REMAINS_BLOCKED`: Terminal safe state. System maintains permanent fail-closed block.
 - `SHUTTING_DOWN`: Graceful teardown initiated.
-- `DISCONNECTED`: Original system routes and DNS restored cleanly.
-
-### 3.2 State Transition Matrix
-| Current State | Event | Target State | Action |
-|---|---|---|---|
-| `OFFLINE` | `start()` | `INITIALIZING` | Snapshot routes, load config |
-| `INITIALIZING` | `init_success` | `BUILDING_CHAIN` | Prepare hop endpoints |
-| `INITIALIZING` | `init_failure` | `OFFLINE` | Cleanup, report error |
-| `BUILDING_CHAIN`| `chain_ready` | `CONNECTING` | Engage Kill Switch, start hop 1 |
-| `CONNECTING` | `hop_connected` | `CONNECTING` / `VERIFYING` | Sequential hop chaining |
-| `CONNECTING` | `connect_failed` | `TRAFFIC_BLOCKED` | Trigger recovery |
-| `VERIFYING` | `verify_passed` | `PROTECTED` | Release protected traffic |
-| `VERIFYING` | `verify_failed` | `TRAFFIC_BLOCKED` | Maintain barrier |
-| `PROTECTED` | `metric_degraded`| `DEGRADED` | Evaluate alternative paths |
-| `PROTECTED` | `tunnel_dropped`| `FAILURE_DETECTED` | Signal kill switch immediately |
-| `DEGRADED` | `tunnel_dropped`| `FAILURE_DETECTED` | Signal kill switch immediately |
-| `DEGRADED` | `metric_restored`| `PROTECTED` | Return to nominal state |
-| `FAILURE_DETECTED` | `contain` | `TRAFFIC_BLOCKED` | Block all outbound non-tunnel traffic |
-| `TRAFFIC_BLOCKED` | `recover` | `RECOVERING` | Evaluate retries/candidates |
-| `RECOVERING` | `reconnected` | `REBUILDING_ROUTE`| Reconfigure layer routes |
-| `RECOVERING` | `retries_exhausted` | `RECOVERY_FAILED` | Safe terminal block |
-| `RECOVERY_FAILED`| `lock` | `TRAFFIC_REMAINS_BLOCKED` | Alarm raised |
-| `REBUILDING_ROUTE`| `routes_ready` | `VERIFYING` | Comprehensive verification |
-| `*` (Any State) | `stop()` | `SHUTTING_DOWN` | Revert routes, firewall, DNS |
-| `SHUTTING_DOWN` | `teardown_done` | `DISCONNECTED` | Verify clean state |
+- `DISCONNECTED`: Original system routes, DNS, and firewall restored cleanly.
 
 ---
 
-## 4. Multi-Hop Routing Mechanics
+## 4. Multi-Hop Routing & IPv6 Capability Architecture
 
+### 4.1 IPv4 Layered Routing Sequence
 For $N$ hops (where $2 \le N \le 10$):
-1. **Hop 1 Endpoint ($E_1$)**: Host route added via physical default gateway ($GW_0$). Interface $T_1$ created.
+1. **Hop 1 Endpoint ($E_1$)**: Host route added via physical default gateway ($GW_0$). Interface $T_1$ created. Kill switch allows outbound UDP handshake to $E_1:P_1$.
 2. **Hop 2 Endpoint ($E_2$)**: Host route added via Hop 1 interface gateway ($GW_1$). Interface $T_2$ created.
 3. **Hop $i$ Endpoint ($E_i$)**: Host route added via Hop $i-1$ interface gateway ($GW_{i-1}$). Interface $T_i$ created.
-4. **Final Hop Default Override**: Rather than overwriting physical $0.0.0.0/0$, SecureChain adds two more-specific routes:
+4. **Final Hop IPv4 Split Default Override**:
    - `0.0.0.0/1` via $GW_N$ (or VPS endpoint)
    - `128.0.0.0/1` via $GW_N$ (or VPS endpoint)
-   This guarantees that all internet traffic traverses the final tunnel while physical gateway routes remain intact for instant, deterministic teardown.
+   These more-specific routes direct all traffic into the tunnel without destroying baseline physical default gateway routes.
+
+### 4.2 Per-Hop IPv6 Capability Detection & Routing
+Before establishing IPv6 routing, SecureChain inspects the `supports_ipv6` attribute across every connected hop:
+- **All-IPv6 Capable Chain** ($H_1 \dots H_N$ all `supports_ipv6 = True`):
+  - IPv6 controller sets status to `TUNNELED`.
+  - Split default IPv6 routes are added: `::/1` and `8000::/1` via exit tunnel gateway ($GW_N$).
+  - WireGuard configuration includes `AllowedIPs = 0.0.0.0/0, ::/0`.
+- **Mixed or IPv4-Only Chain** (Any hop has `supports_ipv6 = False`):
+  - IPv6 controller enforces `BLOCKED_FAIL_CLOSED`.
+  - No IPv6 routes are added to the tunnel.
+  - Physical adapter IPv6 is suppressed to prevent side-channel leakage.
+  - Diagnostic reason is populated: `"IPv6 disabled: Hop X does not support IPv6. External IPv6 blocked."`
 
 ---
 
-## 5. Failure Containment & Cleanup Guarantee
+## 5. Cross-Platform Firewall Architecture
 
-### 5.1 Pre-Flight Route Snapshot
-Before modifying any route, `RoutingController` captures:
-- Full routing table (destination, netmask, gateway, interface, metric).
-- Primary DNS resolvers per adapter.
-- IPv6 adapter binding status.
-A snapshot is stored in memory and retained for state rollback.
+SecureChain abstracts firewall management across platforms through `CrossPlatformFirewallManager`:
 
-### 5.2 Deterministic Teardown
-On `stop()`, unexpected exception, or `SIGINT`/`SIGTERM`:
-1. Kill switch is locked to block direct leakage.
-2. Tunnel interfaces $T_N \dots T_1$ are stopped in reverse order.
-3. Host routes $E_N \dots E_1$ and split `/1` default routes are deleted.
-4. Pre-flight snapshot is cross-referenced; any missing default routes are restored.
-5. DNS servers are restored to snapshot values.
-6. IPv6 bindings are restored.
-7. Kill switch rules are safely removed once original state is verified.
+```mermaid
+graph TD
+    CrossPlatformFirewallManager -->|Windows| Win[WindowsKillSwitch: netsh advfirewall]
+    CrossPlatformFirewallManager -->|Linux| Lin[LinuxNftablesKillSwitch: table inet securechain]
+    CrossPlatformFirewallManager -->|macOS| Mac[MacOsPfKillSwitch: anchor securechain]
+    CrossPlatformFirewallManager -->|Fallback / Non-Root| Virt[VirtualKillSwitch: In-Memory Barrier]
+```
+
+### 5.1 Isolation Invariants
+- **Linux (`nftables`)**: All rules reside strictly within `table inet securechain`. Teardown executes `nft delete table inet securechain`. System tables, Docker chains, and user rules are never flushed.
+- **macOS (`pf`)**: All rules reside strictly within `anchor "securechain"`. Teardown executes `pfctl -a securechain -F all`. Host rules outside the anchor are untouched.
+- **Windows (`netsh`)**: Specific named rules (`SecureChain-BlockOutbound`, `SecureChain-AllowHop1`, `SecureChain-AllowExit`) are managed.
 
 ---
 
-## 6. Operating System Abstraction Strategy
-- **Target OS**: Windows (with cross-platform abstraction architecture).
-- **Native Implementation**: Uses `ROUTE.EXE`, `netsh.exe`, Windows Filtering Platform / Advanced Firewall cmdlets, and Windows DPAPI (`CryptProtectData`/`CryptUnprotectData`).
-- **Virtual Simulation Mesh**: Built-in virtual packet barrier, virtual route table, synthetic DNS resolvers, and deterministic telemetry models. This enables full integration and security verification in un-elevated environments and CI/CD pipelines without external dependencies.
+## 6. Privacy & Traffic Shaping Subsystems
+
+### 6.1 Traffic Shaping Engine
+- **Purpose**: Reduce observable packet clustering and burst timing signatures.
+- **Padding Strategies**:
+  - `bucket`: Quantizes packet sizes to discrete bins (128B, 256B, 512B, 1024B, 1420B).
+  - `adaptive`: Power-of-two quantization up to MTU.
+  - `fixed_mtu`: Pads all packets to tunnel MTU.
+- **Timing Jitter**: Injects bounded pseudo-random delays based on selected profile (low, balanced, high).
+- **Disclaimer**: Does not defeat global passive timing correlation.
+
+### 6.2 Application Privacy Proxy
+- **Interface**: Local HTTP proxy listening on `127.0.0.1:8118`.
+- **Header Normalization**: Strips identifying headers (`X-Forwarded-For`, `X-Real-IP`, `Via`, `CF-Connecting-IP`, `Client-IP`).
+- **User-Agent Normalization**: Standardizes User-Agent to a generic baseline.
+- **TLS Pass-Through**: Transparent `CONNECT` method handling with zero TLS MITM interception.
+
+---
+
+## 7. Race-Hardened Failure Recovery
+
+`RecoveryEngine` synchronizes failure handling via a thread-safe mutex (`_recovery_lock`):
+1. **Atomic Containment**: Lock prevents concurrent recovery threads from racing during failure events.
+2. **In-Place Reconnect**: Tunnels are re-evaluated and re-connected up to `max_attempts`.
+3. **Alternative Path Failover**: If in-place recovery fails, the old chain is torn down, stale routes are purged, and an alternative candidate is connected under continuous kill switch lockdown.
+4. **Terminal Safe State**: If all retries fail, system locks into `TRAFFIC_REMAINS_BLOCKED` and rejects subsequent recovery calls until manual restart.

@@ -222,6 +222,73 @@ class RealityChecker:
                 is_ready=False,
             )
 
+    def check_firewall_backend(self) -> RealityCheckItem:
+        if sys.platform.startswith("win"):
+            admin = is_windows_admin()
+            status = "PASS" if admin else "NOT AVAILABLE"
+            ev = "Windows Advanced Firewall (netsh) elevated" if admin else "Non-elevated shell (VirtualKillSwitch fallback active)"
+        elif sys.platform.startswith("linux"):
+            has_nft = shutil.which("nft") is not None
+            is_root = os.geteuid() == 0 if hasattr(os, "geteuid") else False
+            status = "PASS" if (has_nft and is_root) else "NOT AVAILABLE"
+            ev = "Linux nftables (isolated table inet securechain)" if (has_nft and is_root) else "nftables requires root or CAP_NET_ADMIN (Virtual fallback active)"
+        elif sys.platform == "darwin":
+            has_pf = shutil.which("pfctl") is not None
+            is_root = os.geteuid() == 0 if hasattr(os, "geteuid") else False
+            status = "PASS" if (has_pf and is_root) else "NOT AVAILABLE"
+            ev = "macOS pf (isolated anchor securechain)" if (has_pf and is_root) else "pf requires root privilege (Virtual fallback active)"
+        else:
+            status = "PASS"
+            ev = "VirtualKillSwitch packet barrier active"
+
+        return RealityCheckItem(
+            name="Firewall backend",
+            status=status,
+            mode=TestMode.REAL,
+            evidence=ev,
+            is_ready=(status == "PASS"),
+        )
+
+    def check_ipv6_capability(self) -> RealityCheckItem:
+        strat = getattr(self.config.security, "ipv6_strategy", "block")
+        ev = f"Strategy: {strat}. Fail-closed unless all selected hops explicitly support IPv6."
+        return RealityCheckItem(
+            name="IPv6 capability",
+            status="PASS" if strat in {"block", "auto_capability", "tunnel"} else "FAIL",
+            mode=TestMode.UNIT,
+            evidence=ev,
+            is_ready=True,
+        )
+
+    def check_traffic_shaping(self) -> RealityCheckItem:
+        privacy_cfg = getattr(self.config, "privacy", None)
+        shaping_cfg = getattr(privacy_cfg, "traffic_shaping", None) if privacy_cfg else None
+        enabled = shaping_cfg.enabled if shaping_cfg else False
+        mode = shaping_cfg.mode if shaping_cfg else "disabled"
+        status = "ENABLED" if enabled else "DISABLED"
+        ev = f"Mode: {mode} (Note: Traffic shaping does not defeat global passive timing correlation)"
+        return RealityCheckItem(
+            name="Traffic shaping",
+            status=status,
+            mode=TestMode.UNIT,
+            evidence=ev,
+            is_ready=True,
+        )
+
+    def check_privacy_proxy(self) -> RealityCheckItem:
+        privacy_cfg = getattr(self.config, "privacy", None)
+        proxy_cfg = getattr(privacy_cfg, "proxy", None) if privacy_cfg else None
+        enabled = proxy_cfg.enabled if proxy_cfg else False
+        status = "ENABLED" if enabled else "DISABLED"
+        ev = f"Local proxy {proxy_cfg.host}:{proxy_cfg.port} (transparent CONNECT, no TLS MITM)" if (proxy_cfg and enabled) else "Privacy proxy disabled"
+        return RealityCheckItem(
+            name="Privacy proxy",
+            status=status,
+            mode=TestMode.UNIT,
+            evidence=ev,
+            is_ready=True,
+        )
+
     def run_all_checks(self) -> List[RealityCheckItem]:
         return [
             self.check_core_app(),
@@ -257,11 +324,19 @@ class RealityChecker:
         real_network_overall = "READY" if real_ready else "NOT READY"
         sim_overall = "READY" if sim_env == "READY" else "NOT READY"
 
+        fw_item = self.check_firewall_backend()
+        ipv6_item = self.check_ipv6_capability()
+        shaping_item = self.check_traffic_shaping()
+        proxy_item = self.check_privacy_proxy()
+
         lines = [
             "SecureChain Doctor",
             "",
             f"Core application ............ {core}",
             f"Configuration schema ........ {schema}",
+            "",
+            f"Firewall backend ............ {fw_item.status} ({fw_item.evidence})",
+            f"IPv6 capability ............. {ipv6_item.status} ({ipv6_item.evidence})",
             "",
             f"VPN configuration ........... {vpn_cfg}",
             f"VPN credentials ............. {vpn_cred}",
@@ -269,6 +344,9 @@ class RealityChecker:
             "",
             f"VPS configuration ........... {vps_cfg}",
             f"VPS credentials ............. {vps_cred}",
+            "",
+            f"Traffic shaping ............. {shaping_item.status} ({shaping_item.evidence})",
+            f"Privacy proxy ............... {proxy_item.status} ({proxy_item.evidence})",
             "",
             f"Real network chain .......... {real_chain_status}",
             "",

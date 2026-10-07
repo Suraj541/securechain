@@ -44,6 +44,8 @@ class Chain:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = False
     exit_interface: Optional[str] = None
+    ipv6_enabled: bool = False
+    ipv6_reason: str = "IPv6 fail-closed: unverified"
 
 
 class MultiHopChainManager:
@@ -66,8 +68,13 @@ class MultiHopChainManager:
     def active_chain(self) -> Optional[Chain]:
         return self._active_chain
 
-    def build_candidate_configs(self, hop_count: int, chain_prefix: str = "hop") -> List[TunnelConfig]:
-        """Generate validated synthetic tunnel configs for N hops."""
+    def build_candidate_configs(
+        self,
+        hop_count: int,
+        chain_prefix: str = "hop",
+        supports_ipv6: bool = False,
+    ) -> List[TunnelConfig]:
+        """Generate validated synthetic tunnel configs for N hops with capability awareness."""
         configs: List[TunnelConfig] = []
         for i in range(1, hop_count + 1):
             cfg = TunnelConfig(
@@ -78,6 +85,10 @@ class MultiHopChainManager:
                 assigned_ip=f"10.8.{i}.2",
                 gateway_ip=f"10.8.{i}.1",
                 dns_server=f"10.8.{i}.1",
+                supports_ipv4=True,
+                supports_ipv6=supports_ipv6,
+                assigned_ipv6=f"fd00:8:{i}::2" if supports_ipv6 else None,
+                gateway_ipv6=f"fd00:8:{i}::1" if supports_ipv6 else None,
                 public_key=f"PubKeyHop{i:02d}AbCdEfGhIjKlMnOpQrStUvWxYz01234==",
                 private_key=SecretStr(f"PrivKeyHop{i:02d}sUPeRSeCReTKey12345678901234567=="),
                 mtu=1420 - (i * 20),  # Encapsulation MTU accounting
@@ -148,9 +159,26 @@ class MultiHopChainManager:
             self.routing.add_route("0.0.0.0/1", final_gw, final_iface, metric=5)
             self.routing.add_route("128.0.0.0/1", final_gw, final_iface, metric=5)
 
-            # 4. Bind DNS & IPv6
+            # 4. Capability-Aware IPv6 & DNS Binding
             self.dns.set_tunnel_dns(final_node.config.dns_server, final_iface)
-            self.ipv6.enforce_strategy("block")
+
+            # Evaluate end-to-end chain IPv6 capability
+            all_ipv6 = all(node.config.supports_ipv6 for node in connected_hops)
+            if all_ipv6 and len(connected_hops) > 0:
+                logger.info("Capability check: All hops support IPv6. Enabling end-to-end IPv6 tunneling.")
+                self.ipv6.enforce_strategy("tunnel")
+                final_ipv6_gw = final_node.config.gateway_ipv6 or "fd00:8:1::1"
+                self.routing.add_route("::/1", final_ipv6_gw, final_iface, metric=5)
+                self.routing.add_route("8000::/1", final_ipv6_gw, final_iface, metric=5)
+                chain.ipv6_enabled = True
+                chain.ipv6_reason = "IPv6 enabled: All hops support IPv6 end-to-end."
+            else:
+                unsupported = [f"Hop {node.hop_index} ({node.config.tunnel_id})" for node in connected_hops if not node.config.supports_ipv6]
+                reason = f"IPv6 disabled: {', '.join(unsupported)} does not support IPv6. External IPv6 blocked to prevent leak."
+                logger.info(f"Capability check: {reason} Enforcing BLOCKED_FAIL_CLOSED.")
+                self.ipv6.enforce_strategy("block")
+                chain.ipv6_enabled = False
+                chain.ipv6_reason = reason
 
             # 5. Set Kill Switch Exit Interface
             chain.exit_interface = final_iface
@@ -158,7 +186,7 @@ class MultiHopChainManager:
             self.kill_switch.set_active_exit_interface(final_iface)
 
             self._active_chain = chain
-            logger.info(f"Successfully established {hop_count}-hop chain '{chain.chain_id}' via exit '{final_iface}'")
+            logger.info(f"Successfully established {hop_count}-hop chain '{chain.chain_id}' via exit '{final_iface}' (IPv6: {chain.ipv6_reason})")
             return chain
 
         except Exception as exc:
@@ -206,6 +234,11 @@ class MultiHopChainManager:
             return False
 
         # 4. Verify IPv6
+        if chain.ipv6_enabled:
+            final_ipv6_gw = chain.hops[-1].config.gateway_ipv6 or "fd00:8:1::1"
+            if not self.routing.verify_route("::/1", final_ipv6_gw):
+                logger.error("Chain verification failed: IPv6 ::/1 route missing or incorrect gateway")
+                return False
         ipv6_probe = self.ipv6.probe_leak()
         if not ipv6_probe.is_contained:
             logger.error("Chain verification failed: IPv6 leak detected!")
@@ -240,6 +273,9 @@ class MultiHopChainManager:
                 node.provider.cleanup()
             except Exception as exc:
                 logger.warning(f"Error disconnecting Hop {node.hop_index}: {exc}")
+
+        # 3.5 Re-enforce IPv6 fail-closed block
+        self.ipv6.enforce_strategy("block")
 
         # 4. Disengage Kill Switch once physical network is clean
         self.kill_switch.disable()

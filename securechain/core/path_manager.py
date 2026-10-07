@@ -22,6 +22,22 @@ class CandidatePath:
     telemetry: PathTelemetry
     score: float = 1.0
     healthy_since: float = 0.0  # Unix timestamp when path entered continuous healthy state
+    diagnostic_reason: Optional[str] = None
+
+    @property
+    def supports_ipv6(self) -> bool:
+        """True if every hop in the path explicitly supports IPv6."""
+        return all(c.supports_ipv6 for c in self.hop_configs) if self.hop_configs else False
+
+    @property
+    def supports_ipv4(self) -> bool:
+        """True if every hop in the path supports IPv4."""
+        return all(c.supports_ipv4 for c in self.hop_configs) if self.hop_configs else True
+
+    @property
+    def min_mtu(self) -> int:
+        """Minimum MTU among all hops in the path."""
+        return min(c.mtu for c in self.hop_configs) if self.hop_configs else 1420
 
 
 class AdaptivePathManager:
@@ -85,9 +101,20 @@ class AdaptivePathManager:
         if not self._paths:
             return None
 
-        # If no active path, pick best healthy candidate
+        # Filter candidate pool based on policy constraints (e.g., IPv6 requirement)
+        pool = list(self._paths.values())
+        if self.config.require_ipv6:
+            ipv6_pool = [p for p in pool if p.supports_ipv6]
+            if not ipv6_pool:
+                logger.error(
+                    "Path selection failed: require_ipv6 is True, but no candidate path has end-to-end IPv6 support. Failing closed."
+                )
+                return None
+            pool = ipv6_pool
+
+        # If no active path, pick best healthy candidate from pool
         if not self._active_path_id or self._active_path_id not in self._paths:
-            healthy = [p for p in self._paths.values() if p.telemetry.is_healthy]
+            healthy = [p for p in pool if p.telemetry.is_healthy]
             if not healthy:
                 return None
             best = min(healthy, key=lambda p: p.score)
@@ -96,9 +123,19 @@ class AdaptivePathManager:
 
         active = self._paths[self._active_path_id]
 
+        # If active path violates policy constraint (e.g. requires IPv6 but active lacks IPv6)
+        if self.config.require_ipv6 and not active.supports_ipv6:
+            logger.warning(f"Active path '{active.path_id}' lacks IPv6 while require_ipv6=True; triggering switch.")
+            healthy_ipv6 = [p for p in pool if p.telemetry.is_healthy and p.path_id != active.path_id]
+            if healthy_ipv6:
+                best = min(healthy_ipv6, key=lambda p: p.score)
+                self.set_active_path(best.path_id, now)
+                return best
+            return None
+
         # 1. EMERGENCY SWITCH: If active path is UNHEALTHY, switch immediately to best healthy candidate
         if not active.telemetry.is_healthy:
-            healthy_candidates = [p for p in self._paths.values() if p.path_id != active.path_id and p.telemetry.is_healthy]
+            healthy_candidates = [p for p in pool if p.path_id != active.path_id and p.telemetry.is_healthy]
             if healthy_candidates:
                 best = min(healthy_candidates, key=lambda p: p.score)
                 logger.warning(
@@ -119,7 +156,7 @@ class AdaptivePathManager:
 
         # Find best healthy candidate
         eligible_candidates: List[CandidatePath] = []
-        for p in self._paths.values():
+        for p in pool:
             if p.path_id == active.path_id:
                 continue
             if not p.telemetry.is_healthy:

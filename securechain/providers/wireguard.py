@@ -35,6 +35,32 @@ class WireGuardProvider(VPNProvider):
         """Check if wireguard binary is found in PATH."""
         return self._wg_executable is not None
 
+    def generate_config_content(self, config: TunnelConfig) -> str:
+        """Generate WireGuard configuration string safely."""
+        priv_key = config.private_key.get_secret_value() if config.private_key else ""
+        psk = config.preshared_key.get_secret_value() if config.preshared_key else ""
+
+        addr_str = f"{config.assigned_ip}/24"
+        if config.supports_ipv6 and config.assigned_ipv6:
+            addr_str = f"{addr_str}, {config.assigned_ipv6}/64"
+        allowed_ips = "0.0.0.0/0, ::/0" if config.supports_ipv6 else "0.0.0.0/0"
+
+        conf_lines = [
+            "[Interface]",
+            f"PrivateKey = {priv_key}",
+            f"Address = {addr_str}",
+            f"DNS = {config.dns_server}",
+            f"MTU = {config.mtu}",
+            "",
+            "[Peer]",
+            f"PublicKey = {config.public_key or ''}",
+            f"Endpoint = {config.endpoint_ip}:{config.endpoint_port}",
+            f"AllowedIPs = {allowed_ips}",
+        ]
+        if psk:
+            conf_lines.append(f"PresharedKey = {psk}")
+        return "\n".join(conf_lines)
+
     def connect(self, config: TunnelConfig) -> TunnelStatus:
         if not self.is_available():
             raise TunnelConnectionError(
@@ -48,27 +74,10 @@ class WireGuardProvider(VPNProvider):
         self.config_dir.mkdir(parents=True, exist_ok=True)
         conf_path = self.config_dir / f"{config.tunnel_id}.conf"
 
-        priv_key = config.private_key.get_secret_value() if config.private_key else ""
-        psk = config.preshared_key.get_secret_value() if config.preshared_key else ""
-
-        conf_lines = [
-            "[Interface]",
-            f"PrivateKey = {priv_key}",
-            f"Address = {config.assigned_ip}/24",
-            f"DNS = {config.dns_server}",
-            f"MTU = {config.mtu}",
-            "",
-            "[Peer]",
-            f"PublicKey = {config.public_key or ''}",
-            f"Endpoint = {config.endpoint_ip}:{config.endpoint_port}",
-            "AllowedIPs = 0.0.0.0/0",
-        ]
-        if psk:
-            conf_lines.append(f"PresharedKey = {psk}")
-
+        conf_content = self.generate_config_content(config)
         try:
             with open(conf_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(conf_lines))
+                f.write(conf_content)
 
             # Run wireguard / wg-quick command
             cmd = ["wireguard", "/installtunnelservice", str(conf_path)]

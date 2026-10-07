@@ -29,6 +29,8 @@ class InterfaceInfo:
     subnet_mask: str = "255.255.255.0"
     dns_servers: List[str] = field(default_factory=list)
     mtu: int = 1420
+    ipv6_address: Optional[str] = None
+    gateway_ipv6: Optional[str] = None
 
 
 @dataclass
@@ -57,6 +59,11 @@ class TunnelConfig:
     gateway_ip: str = "10.0.0.1"
     dns_server: str = "10.0.0.1"
     mtu: int = 1420
+    supports_ipv4: bool = True
+    supports_ipv6: bool = False
+    assigned_ipv6: Optional[str] = None
+    gateway_ipv6: Optional[str] = None
+    supports_udp: bool = True
     custom_params: Dict[str, str] = field(default_factory=dict)
 
 

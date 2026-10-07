@@ -88,7 +88,7 @@ class VirtualRoutingController(RoutingController):
 
         for route in self._routes.values():
             net = route.network()
-            if target in net:
+            if target.version == net.version and target in net:
                 matched_routes.append(route)
 
         if not matched_routes:

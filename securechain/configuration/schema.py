@@ -33,7 +33,7 @@ class SecurityConfig(BaseModel):
     kill_switch: bool = True
     dns_protection: bool = True
     ipv6_protection: bool = True
-    ipv6_strategy: Literal["block", "tunnel"] = "block"
+    ipv6_strategy: Literal["block", "tunnel", "auto_capability"] = "block"
 
     model_config = {"extra": "forbid"}
 
@@ -59,6 +59,7 @@ class PathSelectionConfig(BaseModel):
     minimum_switch_interval_seconds: float = Field(default=60.0, ge=0.0, le=3600.0)
     improvement_threshold_percent: float = Field(default=15.0, ge=0.0, le=100.0)
     stability_window_seconds: float = Field(default=30.0, ge=0.0, le=3600.0)
+    require_ipv6: bool = Field(default=False, description="Reject candidate paths containing IPv4-only hops")
     weights: PathWeightsConfig = Field(default_factory=PathWeightsConfig)
 
     model_config = {"extra": "forbid"}
@@ -89,6 +90,40 @@ class VpsConfig(BaseModel):
         return self
 
 
+class TrafficShapingConfig(BaseModel):
+    """Optional traffic shaping and padding configuration."""
+
+    enabled: bool = False
+    mode: Literal["disabled", "low", "balanced", "high"] = "disabled"
+    padding: Literal["none", "bucket", "adaptive", "fixed_mtu"] = "adaptive"
+    jitter_ms: float = Field(default=10.0, ge=0.0, le=500.0)
+    batching_ms: float = Field(default=0.0, ge=0.0, le=100.0)
+
+    model_config = {"extra": "forbid"}
+
+
+class PrivacyProxyConfig(BaseModel):
+    """Optional local application privacy proxy configuration."""
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = Field(default=8118, ge=1024, le=65535)
+    strip_tracking_headers: bool = True
+    normalize_user_agent: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
+class PrivacyConfig(BaseModel):
+    """Privacy profile and optional privacy enhancement extensions."""
+
+    profile: Literal["standard", "enhanced", "high"] = "standard"
+    traffic_shaping: TrafficShapingConfig = Field(default_factory=TrafficShapingConfig)
+    proxy: PrivacyProxyConfig = Field(default_factory=PrivacyProxyConfig)
+
+    model_config = {"extra": "forbid"}
+
+
 class SecureChainConfig(BaseModel):
     application: ApplicationConfig = Field(default_factory=ApplicationConfig)
     chain: ChainConfig = Field(default_factory=ChainConfig)
@@ -96,5 +131,6 @@ class SecureChainConfig(BaseModel):
     path_selection: PathSelectionConfig = Field(default_factory=PathSelectionConfig)
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
     vps: VpsConfig = Field(default_factory=VpsConfig)
+    privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
 
     model_config = {"extra": "forbid"}

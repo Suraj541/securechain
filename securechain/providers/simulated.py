@@ -59,6 +59,8 @@ class SimulatedVPNProvider(VPNProvider):
             gateway_ip=config.gateway_ip,
             dns_servers=[config.dns_server],
             mtu=config.mtu,
+            ipv6_address=config.assigned_ipv6,
+            gateway_ipv6=config.gateway_ipv6,
         )
         self._state = TunnelState.CONNECTED
         self._connected_at = time.time()

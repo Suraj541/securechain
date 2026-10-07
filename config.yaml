@@ -1,6 +1,6 @@
 application:
   name: SecureChain
-  version: 1.0.0
+  version: 1.1.0
 chain:
   min_hops: 2
   max_hops: 10
@@ -9,12 +9,13 @@ security:
   kill_switch: true
   dns_protection: true
   ipv6_protection: true
-  ipv6_strategy: block
+  ipv6_strategy: block  # "block", "auto_capability", or "tunnel"
 path_selection:
   evaluation_interval_seconds: 10.0
   minimum_switch_interval_seconds: 60.0
   improvement_threshold_percent: 15.0
   stability_window_seconds: 30.0
+  require_ipv6: false  # If true, only paths where all hops support IPv6 will be selected
   weights:
     latency: 0.35
     loss: 0.3
@@ -28,3 +29,18 @@ vps:
   enabled: false
   endpoint: null
   protocol: null
+privacy:
+  # Privacy profile presets: "standard" (default), "enhanced", or "high"
+  profile: standard
+  traffic_shaping:
+    enabled: false  # Disabled by default; does not defeat global passive timing correlation
+    mode: balanced  # "disabled", "low", "balanced", or "high"
+    padding: adaptive  # "none", "bucket", "adaptive", or "fixed_mtu"
+    jitter_ms: 10.0
+    batching_ms: 20.0
+  privacy_proxy:
+    enabled: false  # Disabled by default; local HTTP header sanitizer
+    host: 127.0.0.1
+    port: 8118
+    strip_tracking_headers: true
+    normalize_user_agent: false

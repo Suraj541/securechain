@@ -18,8 +18,8 @@ class RouteEntry:
     is_temporary: bool = False
     added_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def network(self) -> ipaddress.IPv4Network:
-        return ipaddress.IPv4Network(self.destination, strict=False)
+    def network(self):
+        return ipaddress.ip_network(self.destination, strict=False)
 
 
 @dataclass
