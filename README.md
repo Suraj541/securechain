@@ -305,13 +305,13 @@ SecureChain separates all test results into distinct execution tiers with verifi
 
 ```text
 SecureChain Test Summary
-+-------------------------------------------------------------------------+
-| REAL:        Passed: 0  | Failed: 0 | Not Configured: 4 | Not Tested: 2 |
-| UNIT:        Passed: 4  | Failed: 0                                     |
-| SIMULATION:  Passed: 7  | Failed: 0                                     |
-|                                                                         |
++----------------------------------------------------------------------------------+
+| REAL:        Passed: 0  | Failed: 0 | Not Configured: 4 | Not Tested: 2          |
+| UNIT:        Passed: 4  | Failed: 0                                              |
+| SIMULATION:  Passed: 7  | Failed: 0                                              |
+|                                                                                  |
 | Core Software: PASS  |  Simulation: PASS  |  Real Infrastructure: NOT CONFIGURED |
-+-------------------------------------------------------------------------+
++----------------------------------------------------------------------------------+
 ```
 
 To run the automated pytest regression suite:
