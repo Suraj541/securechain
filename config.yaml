@@ -1,0 +1,30 @@
+application:
+  name: SecureChain
+  version: 1.0.0
+chain:
+  min_hops: 2
+  max_hops: 10
+  default_hops: 3
+security:
+  kill_switch: true
+  dns_protection: true
+  ipv6_protection: true
+  ipv6_strategy: block
+path_selection:
+  evaluation_interval_seconds: 10.0
+  minimum_switch_interval_seconds: 60.0
+  improvement_threshold_percent: 15.0
+  stability_window_seconds: 30.0
+  weights:
+    latency: 0.35
+    loss: 0.3
+    jitter: 0.15
+    failure_rate: 0.2
+recovery:
+  max_attempts: 3
+  backoff_seconds: 5.0
+  path_reselection: true
+vps:
+  enabled: false
+  endpoint: null
+  protocol: null

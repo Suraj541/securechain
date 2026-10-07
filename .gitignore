@@ -1,0 +1,54 @@
+# Python Bytecode & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Test Caches & Runtime Artifacts
+artifacts/
+reports/
+logs/
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+docs/TESTING.md
+
+# Private Engineering & Development Phase Documents
+PLAN.md
+FINAL_ACCEPTANCE_REPORT.md
+FINAL_REVIEW.md
+FINAL_OWNERSHIP_REVIEW.md
+TEST_INTEGRITY_AUDIT.md
+GITHUB_RELEASE_AUDIT.md
+docs/phases/
+/SECURITY_DESIGN.md
+/ARCHITECTURE.md
+
+# Private Subsystem Specs & Internal Benchmarks
+docs/CREDENTIAL_SECURITY.md
+docs/DNS.md
+docs/FAILURE_RECOVERY.md
+docs/IPV6.md
+docs/KILL_SWITCH.md
+docs/PATH_SELECTION.md
+docs/PERFORMANCE.md
+docs/ROUTING.md
+
+# Secret Vaults, Live State & WireGuard Configs
+.credentials_vault/
+.securechain_state.json
+.wireguard_configs/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
